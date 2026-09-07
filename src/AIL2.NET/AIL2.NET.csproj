@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <RootNamespace>AIL2</RootNamespace>
+        <IsAotCompatible>true</IsAotCompatible>
+        <Title>AIL2.NET</Title>
+        <PackageId>AIL2.NET</PackageId>
+        <Description>Managed AIL/32-compatible XMIDI sequencing, FM interpretation, MT-32 messages, and PCM/VOC playback.</Description>
+        <PackageTags>miles;ail;xmidi;midi;opl;fm;voc;audio</PackageTags>
+    </PropertyGroup>
+</Project>

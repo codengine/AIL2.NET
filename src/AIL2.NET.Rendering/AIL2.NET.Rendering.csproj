@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <RootNamespace>AIL2.Rendering</RootNamespace>
+        <IsAotCompatible>true</IsAotCompatible>
+        <Title>AIL2.NET.Rendering</Title>
+        <PackageId>AIL2.NET.Rendering</PackageId>
+        <Description>PCM rendering and WAV export for AIL2.NET using NukedOPL3Sharp.</Description>
+        <PackageTags>miles;ail;xmidi;opl;fm;audio;rendering;wav</PackageTags>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../AIL2.NET/AIL2.NET.csproj"/>
+        <PackageReference Include="NukedOPL3Sharp" Version="1.3.1"/>
+    </ItemGroup>
+</Project>

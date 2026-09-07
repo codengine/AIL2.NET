@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <RootNamespace>AIL2.Parity</RootNamespace>
+        <OutputType>Exe</OutputType>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../../src/AIL2.NET/AIL2.NET.csproj"/>
+        <PackageReference Include="UnicornEngine.Unicorn" Version="2.1.3"/>
+    </ItemGroup>
+</Project>

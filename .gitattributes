@@ -1,0 +1,4 @@
+* text=auto
+
+# Preserve the exact DOS-era source, resource, and executable bytes used by parity.
+reference/** -text

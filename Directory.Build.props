@@ -1,0 +1,45 @@
+<Project>
+    <PropertyGroup>
+        <_AIL2ProjectPath>$([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)'))</_AIL2ProjectPath>
+        <_AIL2ProjectPath>$([System.String]::Copy('$(_AIL2ProjectPath)').Replace('\', '/'))</_AIL2ProjectPath>
+        <AIL2OwnedProject Condition="$([System.String]::Copy('$(_AIL2ProjectPath)').StartsWith('src/')) Or $([System.String]::Copy('$(_AIL2ProjectPath)').StartsWith('tests/')) Or $([System.String]::Copy('$(_AIL2ProjectPath)').StartsWith('tools/'))">true</AIL2OwnedProject>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(AIL2OwnedProject)' == 'true'">
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>14.0</LangVersion>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Deterministic>true</Deterministic>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <AnalysisLevel>latest-Recommended</AnalysisLevel>
+        <AnalysisLevelNaming>latest-none</AnalysisLevelNaming>
+        <EnableNETAnalyzers>true</EnableNETAnalyzers>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(MSBuildProjectName)' == 'AIL2.NET' Or '$(MSBuildProjectName)' == 'AIL2.NET.Rendering'">
+        <PackageId>$(MSBuildProjectName)</PackageId>
+        <Version>1.0.0</Version>
+        <Authors>Stefan Hueg</Authors>
+        <Company>codengine</Company>
+        <Copyright>Copyright © 2026 Stefan Hueg</Copyright>
+        <PackageProjectUrl>https://github.com/codengine/AIL2.NET</PackageProjectUrl>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <RepositoryUrl>https://github.com/codengine/AIL2.NET</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+        <EnablePackageValidation>true</EnablePackageValidation>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(AIL2OwnedProject)' == 'true'">
+        <PackageReference Include="Roslynator.Analyzers" Version="5.0.0" PrivateAssets="all"/>
+    </ItemGroup>
+    <ItemGroup Condition="'$(MSBuildProjectName)' == 'AIL2.NET' Or '$(MSBuildProjectName)' == 'AIL2.NET.Rendering'">
+        <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath=""/>
+        <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath=""/>
+        <None Include="$(MSBuildThisFileDirectory)THIRD_PARTY_NOTICES.md" Pack="true" PackagePath=""/>
+        <None Include="$(MSBuildThisFileDirectory)reference/LICENSE.md" Pack="true" PackagePath="reference"/>
+    </ItemGroup>
+</Project>

@@ -1,0 +1,42 @@
+# Generated fixtures, oracle binaries, reports, exports and publish output
+/artifacts/
+/publish/
+/dist/
+/out/
+[Bb]in/
+[Oo]bj/
+TestResults/
+/coverage/
+*.binlog
+*.nupkg
+*.snupkg
+/packages/
+/.nuget/packages/
+/.nuget/http-cache/
+node_modules/
+/game_files/
+/private-resources/
+
+# IDE, editor and local agent state
+.vs/
+.idea/
+.vscode/
+/.agents/
+/.codex/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+*.sln.iml
+*.swp
+*.swo
+*~
+
+# Temporary files and operating-system metadata
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+Desktop.ini

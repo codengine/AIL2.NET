@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AIL2.NET/AIL2.NET.csproj" />
+    <Project Path="src/AIL2.NET.Rendering/AIL2.NET.Rendering.csproj" />
+    <Project Path="src/AIL2.NET.Player/AIL2.NET.Player.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/AIL2.NET.Parity/AIL2.NET.Parity.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AIL2.NET.Tests/AIL2.NET.Tests.csproj" />
+  </Folder>
+</Solution>
