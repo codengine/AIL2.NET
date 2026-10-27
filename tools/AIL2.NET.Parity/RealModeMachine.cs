@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace AIL2.Parity;
 
 /// <summary>Owns a bounded 16-bit real-mode guest for original AIL 2.x drivers.</summary>
@@ -69,8 +71,7 @@ internal sealed class RealModeMachine : UnicornEngine
     public uint Call(ushort segment, ushort offset, params ushort[] arguments)
     {
         var frame = new byte[4 + (arguments.Length * 2)];
-        frame[2] = (byte)(ReturnAddress >> 4);
-        frame[3] = (byte)(ReturnAddress >> 12);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2), (ushort)(ReturnAddress >> 4));
         for (var i = 0; i < arguments.Length; i++)
         {
             frame[4 + (i * 2)] = (byte)arguments[i];

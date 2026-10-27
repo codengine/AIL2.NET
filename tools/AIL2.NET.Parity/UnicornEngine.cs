@@ -13,17 +13,11 @@ internal unsafe class UnicornEngine : IDisposable
     /// <summary>The owned Unicorn engine handle.</summary>
     private nint _handle;
 
-    /// <summary>Rooted callbacks for source procedure and boundary hooks.</summary>
-    private readonly List<CodeHook> _codeHooks = [];
-
-    /// <summary>The rooted IN callback; Unicorn retains only its native function pointer.</summary>
-    private readonly InputHook _input;
-
-    /// <summary>The rooted OUT callback; Unicorn retains only its native function pointer.</summary>
-    private readonly OutputHook _output;
-
-    /// <summary>The rooted interrupt callback; Unicorn retains only its native function pointer.</summary>
-    private readonly InterruptHook _interrupt;
+    /// <summary>
+    ///     Every callback registered with Unicorn. Unicorn keeps only native function pointers, so the delegate instances
+    ///     behind them must stay reachable for the engine's lifetime.
+    /// </summary>
+    private readonly List<Delegate> _callbacks = [];
 
     /// <summary>A hook failure retained until native execution returns.</summary>
     private Exception? _hookError;
@@ -55,39 +49,7 @@ internal unsafe class UnicornEngine : IDisposable
         Check(uc_open(4, mode, out _handle));
         Check(uc_mem_map(_handle, 0, memorySize, 7));
         Write(0x463, [0xd4, 0x03, 0, 0]);
-        _input = Input;
-        _output = Output;
-        _interrupt = InterruptHook;
-        Check(uc_hook_add(_handle, out _, 2, Marshal.GetFunctionPointerForDelegate(_input), 0, 1, 0, 218));
-        Check(uc_hook_add(_handle, out _, 2, Marshal.GetFunctionPointerForDelegate(_output), 0, 1, 0, 500));
-        Check(uc_hook_add(_handle, out _, 1, Marshal.GetFunctionPointerForDelegate(_interrupt), 0, 1, 0, 0));
-        return;
-
-        void InterruptHook(IntPtr nint, uint number, IntPtr nint1)
-        {
-            try
-            {
-                Interrupt(number);
-            }
-            catch (Exception e)
-            {
-                StopAfterHookFailure(e);
-            }
-        }
-
-        void Output(IntPtr nint, uint port, int size, uint value, IntPtr nint1)
-        {
-            try
-            {
-                WritePort(port, size, value);
-            }
-            catch (Exception e)
-            {
-                StopAfterHookFailure(e);
-            }
-        }
-
-        uint Input(IntPtr nint, uint port, int size, IntPtr nint1)
+        InputHook input = (_, port, size, _) =>
         {
             try
             {
@@ -98,7 +60,32 @@ internal unsafe class UnicornEngine : IDisposable
                 StopAfterHookFailure(e);
                 return 0;
             }
-        }
+        };
+        OutputHook output = (_, port, size, value, _) =>
+        {
+            try
+            {
+                WritePort(port, size, value);
+            }
+            catch (Exception e)
+            {
+                StopAfterHookFailure(e);
+            }
+        };
+        InterruptHook interrupt = (_, number, _) =>
+        {
+            try
+            {
+                Interrupt(number);
+            }
+            catch (Exception e)
+            {
+                StopAfterHookFailure(e);
+            }
+        };
+        Check(uc_hook_add(_handle, out _, 2, Root(input), 0, 1, 0, 218));
+        Check(uc_hook_add(_handle, out _, 2, Root(output), 0, 1, 0, 500));
+        Check(uc_hook_add(_handle, out _, 1, Root(interrupt), 0, 1, 0, 0));
     }
 
     /// <summary>Runs an observer or boundary substitution when the guest reaches an exact address.</summary>
@@ -106,13 +93,7 @@ internal unsafe class UnicornEngine : IDisposable
     /// <param name="action">The callback, whose failures are propagated after native execution returns.</param>
     public void Hook(uint address, Action action)
     {
-        // Each method-group conversion allocates a new delegate, so the rooted instance must be the registered one.
-        CodeHook callback = Callback;
-        _codeHooks.Add(callback);
-        Check(uc_hook_add(_handle, out _, 4, Marshal.GetFunctionPointerForDelegate(callback), 0, address, address, 0));
-        return;
-
-        void Callback(nint _1, ulong _2, uint _3, nint _4)
+        CodeHook callback = (_, _, _, _) =>
         {
             try
             {
@@ -122,7 +103,18 @@ internal unsafe class UnicornEngine : IDisposable
             {
                 StopAfterHookFailure(e);
             }
-        }
+        };
+        Check(uc_hook_add(_handle, out _, 4, Root(callback), 0, address, address, 0));
+    }
+
+    /// <summary>Keeps a callback reachable for the engine's lifetime and returns the pointer Unicorn will call.</summary>
+    /// <typeparam name="T">The unmanaged-callable delegate type.</typeparam>
+    /// <param name="callback">The delegate instance to register.</param>
+    /// <returns>The native function pointer of exactly this instance.</returns>
+    private nint Root<T>(T callback) where T : Delegate
+    {
+        _callbacks.Add(callback);
+        return Marshal.GetFunctionPointerForDelegate(callback);
     }
 
     /// <summary>Requests a native stop without allowing managed exceptions to escape a native callback.</summary>

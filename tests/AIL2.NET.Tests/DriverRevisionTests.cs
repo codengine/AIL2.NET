@@ -1,5 +1,4 @@
 using AIL2.Formats;
-using AIL2.Music;
 using AIL2.Parity;
 using Xunit;
 
