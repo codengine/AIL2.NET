@@ -3,6 +3,7 @@
         <RootNamespace>AIL2.Tests</RootNamespace>
         <IsPackable>false</IsPackable>
     </PropertyGroup>
+    <Import Project="../../tools/UnicornHost.targets"/>
     <ItemGroup>
         <ProjectReference Include="../../src/AIL2.NET/AIL2.NET.csproj"/>
         <ProjectReference Include="../../src/AIL2.NET.Rendering/AIL2.NET.Rendering.csproj"/>

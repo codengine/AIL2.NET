@@ -26,9 +26,8 @@ dotnet run --project src/AIL2.NET.Player -c Release
 ```
 
 The player needs an available OpenAL audio device. Original-code tests additionally require Node.js and GCC. NuGet
-supplies Unicorn 2 on supported Linux and macOS targets. Run parity on Linux x64; Unicorn 2.1.3 currently terminates
-under the Windows .NET test host because of
-its [Control Flow Guard incompatibility](https://github.com/unicorn-engine/unicorn/issues/2281). The REL105 WR drivers,
+supplies Unicorn 2 on supported Linux and macOS targets; Windows x64 builds download it, and the parity and test
+executables run there as described in [validation](docs/validation.md#windows). The REL105 WR drivers,
 the A214 `.ADV` drivers and A214 `SOUNDFX.C` are included. No game assets are required: tests and default harness
 scenarios generate their own resources. Tests of the 1991 drivers also play Star Trek: 25th Anniversary's own drivers
 and songs when they are copied to the ignored `game_files/st25th/` (`drivers/*.ADV`, `music/*`); otherwise they are

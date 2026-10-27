@@ -22,4 +22,5 @@ The player OpenAL adapter draws on the NukedOPL3Sharp demo. Its BSD 3-Clause not
 
 Avalonia, Silk.NET/OpenAL, Tmds.DBus.Protocol, UnicornEngine.Unicorn, and Roslynator.Analyzers retain the terms supplied
 by their respective projects and packages. Roslynator is a private build dependency. Unicorn is used only by the parity
-harness. None is relicensed by AIL2.NET's MIT license.
+harness; on Windows the build downloads its library from the same release's PyPI wheel, which the repository does not
+redistribute. None is relicensed by AIL2.NET's MIT license.

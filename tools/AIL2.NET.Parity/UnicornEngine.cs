@@ -10,6 +10,14 @@ internal unsafe class UnicornEngine : IDisposable
     /// <summary>The logical import name resolved to Unicorn's platform library.</summary>
     private const string Library = "unicorn";
 
+    /// <summary>
+    ///     The enabled Windows mitigations that would terminate this process inside Unicorn, or null when none is. Unicorn
+    ///     leaves its generated code through a register-restoring longjmp, which Control Flow Guard and CET user shadow
+    ///     stacks end with a 0xC0000409 fast fail that no handler sees. tools/UnicornHost.targets builds the harness and
+    ///     test executables without both; dotnet.exe keeps Control Flow Guard.
+    /// </summary>
+    private static readonly string? BlockingMitigations = OperatingSystem.IsWindows() ? FindBlockingMitigations() : null;
+
     /// <summary>The owned Unicorn engine handle.</summary>
     private nint _handle;
 
@@ -44,8 +52,18 @@ internal unsafe class UnicornEngine : IDisposable
     ///     The BIOS data area names the color CRTC at 3D4h; the MT-32 drivers derive the retrace status port 3DAh from
     ///     it.
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    ///     Control Flow Guard or CET shadow stacks are enforced for this process, or Unicorn reports an error.
+    /// </exception>
     protected UnicornEngine(int mode, nuint memorySize)
     {
+        if (BlockingMitigations is not null)
+        {
+            throw new InvalidOperationException(
+                $"{BlockingMitigations} would terminate this process inside Unicorn. Start the AIL2.NET.Parity or " +
+                "AIL2.NET.Tests executable, which tools/UnicornHost.targets builds without them, not dotnet with the assembly.");
+        }
+
         Check(uc_open(4, mode, out _handle));
         Check(uc_mem_map(_handle, 0, memorySize, 7));
         Write(0x463, [0xd4, 0x03, 0, 0]);
@@ -214,6 +232,32 @@ internal unsafe class UnicornEngine : IDisposable
         }
     }
 
+    /// <summary>Names the enabled mitigations that terminate Unicorn in the current Windows process.</summary>
+    /// <returns>The names joined with "and", or null when none is enabled.</returns>
+    /// <remarks>A policy Windows cannot report, such as shadow stacks before their introduction, is not enforced.</remarks>
+    private static string? FindBlockingMitigations()
+    {
+        var names = new List<string>();
+        if (IsEnabled(7))
+        {
+            names.Add("Control Flow Guard");
+        }
+
+        if (IsEnabled(15))
+        {
+            names.Add("CET shadow stacks");
+        }
+
+        return names.Count == 0 ? null : string.Join(" and ", names);
+
+        // ProcessControlFlowGuardPolicy and ProcessUserShadowStackPolicy both keep their enable flag in bit 0.
+        static bool IsEnabled(int policy)
+        {
+            uint flags = 0;
+            return GetProcessMitigationPolicy(-1, policy, &flags, sizeof(uint)) && (flags & 1) != 0;
+        }
+    }
+
     /// <summary>Converts a Unicorn status code into an explicit harness failure.</summary>
     /// <param name="result">The native status code, with zero meaning success.</param>
     /// <exception cref="InvalidOperationException">Unicorn reports a nonzero status.</exception>
@@ -269,6 +313,16 @@ internal unsafe class UnicornEngine : IDisposable
     /// <param name="user">The opaque registration data, unused by this harness.</param>
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void CodeHook(nint handle, ulong address, uint size, nint user);
+
+    /// <summary>Reads one mitigation policy of a Windows process.</summary>
+    /// <param name="process">The process handle; -1 is the current process.</param>
+    /// <param name="policy">The PROCESS_MITIGATION_POLICY value.</param>
+    /// <param name="buffer">Receives the policy structure.</param>
+    /// <param name="length">The structure size in bytes.</param>
+    /// <returns>True when Windows reported the policy.</returns>
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessMitigationPolicy(nint process, int policy, void* buffer, nuint length);
 
     /// <summary>Creates a native Unicorn engine.</summary>
     /// <param name="arch">The Unicorn architecture identifier.</param>

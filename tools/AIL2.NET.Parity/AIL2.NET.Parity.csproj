@@ -5,8 +5,34 @@
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <IsPackable>false</IsPackable>
     </PropertyGroup>
+    <Import Project="../UnicornHost.targets"/>
+    <!--
+        The UnicornEngine.Unicorn package ships no Windows library, so Windows builds take unicorn.dll from the same
+        release's PyPI wheel. Only a wheel matching the pinned SHA-256 is unpacked into the shared cache.
+    -->
+    <PropertyGroup>
+        <UnicornVersion>2.1.3</UnicornVersion>
+        <UnicornWheelUrl>https://files.pythonhosted.org/packages/d3/dd/fc08dcabe1b0a38a2d0d560a06213c88fe0b6de09b956273e6800c33210c/unicorn-2.1.3-cp313-cp313-win_amd64.whl</UnicornWheelUrl>
+        <UnicornWheelSha256>1f218e51ed5e9047575ef6200a6acfacf3ee545e3a9df905445a01101399296e</UnicornWheelSha256>
+        <UnicornDirectory>$(MSBuildThisFileDirectory)../../artifacts/unicorn/$(UnicornVersion)/</UnicornDirectory>
+    </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="../../src/AIL2.NET/AIL2.NET.csproj"/>
-        <PackageReference Include="UnicornEngine.Unicorn" Version="2.1.3"/>
+        <PackageReference Include="UnicornEngine.Unicorn" Version="$(UnicornVersion)"/>
     </ItemGroup>
+    <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+        <None Include="$(UnicornDirectory)unicorn.dll" CopyToOutputDirectory="PreserveNewest" Visible="false"/>
+    </ItemGroup>
+    <Target Name="DownloadUnicorn" BeforeTargets="BeforeBuild"
+            Condition="$([MSBuild]::IsOSPlatform('Windows')) And !Exists('$(UnicornDirectory)unicorn.dll')">
+        <DownloadFile SourceUrl="$(UnicornWheelUrl)" DestinationFolder="$(IntermediateOutputPath)"
+                      DestinationFileName="unicorn.whl"/>
+        <VerifyFileHash File="$(IntermediateOutputPath)unicorn.whl" Hash="$(UnicornWheelSha256)"/>
+        <!-- On Windows, Unzip matches this Include only with backslashes; forward-slash patterns extract nothing. -->
+        <Unzip SourceFiles="$(IntermediateOutputPath)unicorn.whl" DestinationFolder="$(IntermediateOutputPath)unicorn"
+               Include="unicorn\lib\unicorn.dll"/>
+        <Copy SourceFiles="$(IntermediateOutputPath)unicorn/unicorn/lib/unicorn.dll" DestinationFolder="$(UnicornDirectory)"/>
+        <Delete Files="$(IntermediateOutputPath)unicorn.whl"/>
+        <RemoveDir Directories="$(IntermediateOutputPath)unicorn"/>
+    </Target>
 </Project>

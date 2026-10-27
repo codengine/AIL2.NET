@@ -1,0 +1,42 @@
+<Project>
+    <!--
+        Unicorn leaves its generated code through a register-restoring longjmp. Windows Control Flow Guard and CET user
+        shadow stacks both treat that as hijacked control flow and terminate the process with 0xC0000409, so every
+        executable that loads Unicorn starts without either. The SDK switches off only CET; CFG comes from the GUARD_CF
+        header flag of the apphost template, which DisableControlFlowGuard clears in the generated apphost.
+    -->
+    <PropertyGroup>
+        <CetCompat>false</CetCompat>
+    </PropertyGroup>
+    <UsingTask TaskName="ClearControlFlowGuardFlag" TaskFactory="RoslynCodeTaskFactory"
+               AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+        <ParameterGroup>
+            <Executable ParameterType="System.String" Required="true"/>
+        </ParameterGroup>
+        <Task>
+            <!-- Inline tasks compile against .NET Standard 2.0; BitConverter is little-endian on every MSBuild host. -->
+            <Code Type="Fragment" Language="cs"><![CDATA[
+var bytes = File.ReadAllBytes(Executable);
+var header = BitConverter.ToInt32(bytes, 0x3c);
+if (bytes[0] != 'M' || bytes[1] != 'Z' || BitConverter.ToUInt32(bytes, header) != 0x4550)
+{
+    Log.LogError($"{Executable} is not a PE image.");
+    return false;
+}
+
+// DllCharacteristics has the same optional-header offset in PE32 and PE32+.
+var offset = header + 24 + 70;
+var flags = BitConverter.ToUInt16(bytes, offset);
+if ((flags & 0x4000) != 0)
+{
+    BitConverter.GetBytes((ushort)(flags & ~0x4000)).CopyTo(bytes, offset);
+    File.WriteAllBytes(Executable, bytes);
+}
+]]></Code>
+        </Task>
+    </UsingTask>
+    <Target Name="DisableControlFlowGuard" AfterTargets="_CreateAppHost"
+            Condition="'$(AppHostIntermediatePath)' != '' And $(AppHostIntermediatePath.EndsWith('.exe')) And Exists('$(AppHostIntermediatePath)')">
+        <ClearControlFlowGuardFlag Executable="$(AppHostIntermediatePath)"/>
+    </Target>
+</Project>
