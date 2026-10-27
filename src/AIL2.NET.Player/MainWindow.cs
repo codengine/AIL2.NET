@@ -15,11 +15,12 @@ public sealed class MainWindow : Window
     /// <summary>The worker disposed asynchronously when this window closes.</summary>
     private readonly PlaybackWorker _worker;
 
-    /// <summary>The music device-family selector.</summary>
+    /// <summary>The music device-family selector; the PC speaker is absent because the renderer cannot play it.</summary>
     private readonly ComboBox _music = new()
     {
         Name = "MusicDevice",
-        ItemsSource = Enum.GetValues<MusicDevice>().Select(device => new DeviceChoice(device)).ToArray(),
+        ItemsSource = Enum.GetValues<MusicDevice>().Where(device => device != MusicDevice.PcSpeaker)
+            .Select(device => new DeviceChoice(device)).ToArray(),
         SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch
     };
 

@@ -57,7 +57,7 @@ public sealed class AILRenderer : IOplOutput, ISampleOutput, IMidiOutput, IDispo
     public long PositionFrames { get; private set; }
 
     /// <summary>Creates a renderer and session on the calling thread.</summary>
-    /// <param name="music">The device and chip selection.</param>
+    /// <param name="music">The device, chip and driver release selection.</param>
     /// <param name="digitalProfile">The sample profile, or null to disable samples.</param>
     /// <param name="sampleRate">The positive output frame rate in hertz, defaulting to 48000.</param>
     /// <param name="midiObserver">An optional caller-owned MIDI sink that also receives initialization messages.</param>
@@ -66,15 +66,22 @@ public sealed class AILRenderer : IOplOutput, ISampleOutput, IMidiOutput, IDispo
     ///     messages are exposed but not synthesized.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">sampleRate is nonpositive or digitalProfile is undefined.</exception>
-    /// <exception cref="NotSupportedException">The device and chip combination has no matching driver profile.</exception>
+    /// <exception cref="NotSupportedException">
+    ///     The combination has no matching driver profile in the selected release, or it selects the PC speaker, which the
+    ///     renderer does not synthesize.
+    /// </exception>
     public AILRenderer(MusicConfiguration music,
         DigitalProfile? digitalProfile = DigitalProfile.SoundBlasterPro,
         int sampleRate = 48000,
-        IMidiOutput? midiObserver = null) : this(music.DriverProfile, digitalProfile, sampleRate, midiObserver)
+        IMidiOutput? midiObserver = null) : this(music.DriverProfile,
+        music.Revision,
+        digitalProfile,
+        sampleRate,
+        midiObserver)
     {
     }
 
-    /// <summary>Creates a stereo renderer with independently selected music and sample profiles.</summary>
+    /// <summary>Creates a stereo renderer with independently selected music and sample profiles and AIL 2.14 behavior.</summary>
     /// <param name="musicProfile">The music profile, or null to disable music.</param>
     /// <param name="digitalProfile">The sample profile, or null to disable samples.</param>
     /// <param name="sampleRate">The positive output frame rate in hertz, defaulting to 48000.</param>
@@ -84,11 +91,37 @@ public sealed class AILRenderer : IOplOutput, ISampleOutput, IMidiOutput, IDispo
     ///     messages. Compression decoding and MT-32 synthesis are external responsibilities.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">sampleRate is nonpositive or either profile value is undefined.</exception>
+    /// <exception cref="NotSupportedException">musicProfile is the PC speaker, which the renderer does not synthesize.</exception>
     public AILRenderer(MusicProfile? musicProfile = MusicProfile.AdLib,
         DigitalProfile? digitalProfile = DigitalProfile.SoundBlasterPro,
         int sampleRate = 48000,
-        IMidiOutput? midiObserver = null)
+        IMidiOutput? midiObserver = null) : this(musicProfile,
+        DriverRevision.Ail214,
+        digitalProfile,
+        sampleRate,
+        midiObserver)
     {
+    }
+
+    /// <summary>Creates a stereo renderer for a validated profile and driver release.</summary>
+    /// <param name="musicProfile">The music profile, or null to disable music.</param>
+    /// <param name="revision">The driver release, already validated for the profile.</param>
+    /// <param name="digitalProfile">The sample profile, or null to disable samples.</param>
+    /// <param name="sampleRate">The positive output frame rate in hertz.</param>
+    /// <param name="midiObserver">An optional caller-owned MIDI sink that also receives initialization messages.</param>
+    /// <exception cref="ArgumentOutOfRangeException">sampleRate is nonpositive or either profile value is undefined.</exception>
+    /// <exception cref="NotSupportedException">musicProfile is the PC speaker.</exception>
+    private AILRenderer(MusicProfile? musicProfile,
+        DriverRevision revision,
+        DigitalProfile? digitalProfile,
+        int sampleRate,
+        IMidiOutput? midiObserver)
+    {
+        if (musicProfile == MusicProfile.PcSpeaker)
+        {
+            throw new NotSupportedException("The renderer does not synthesize the PC speaker; use AILSession with an ISpeakerOutput.");
+        }
+
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sampleRate);
         SampleRate = sampleRate;
         _midiObserver = midiObserver;
@@ -106,7 +139,10 @@ public sealed class AILRenderer : IOplOutput, ISampleOutput, IMidiOutput, IDispo
             chip.Reset((uint)sampleRate);
         }
 
-        Session = new AILSession(musicProfile, digitalProfile, this, this, this);
+        Session = musicProfile is { } profile
+            ? new AILSession(MusicConfiguration.FromDriverProfile(profile) with { Revision = revision },
+                digitalProfile, this, this, this)
+            : new AILSession(null, digitalProfile, this, this, this);
     }
 
     /// <summary>Renders complete stereo frames without making the result depend on the caller's buffer size.</summary>

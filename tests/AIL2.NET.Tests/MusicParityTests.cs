@@ -38,7 +38,8 @@ public sealed class MusicParityTests
             pair.Install((byte)(key >> 8), (byte)key, bytes);
         }
 
-        Assert.Equal(profile == MusicProfile.Mt32 ? 1 : 3, requests);
+        // SPKR.INC's get_request always answers -1: the speaker uses no timbres.
+        Assert.Equal(profile switch { MusicProfile.Mt32 => 1, MusicProfile.PcSpeaker => 0, _ => 3 }, requests);
         pair.Check();
     }
 
@@ -87,6 +88,42 @@ public sealed class MusicParityTests
         }
 
         Assert.Equal(SequenceStatus.Done, sequence.Status);
+        pair.Check();
+    }
+
+    /// <summary>
+    ///     XMIDI events that change the time signature (including denominators below a quarter), the tempo and the
+    ///     beat/bar reset controller between delays, so beat and measure counting crosses every branch.
+    /// </summary>
+    internal static readonly byte[] BeatEvents =
+    [
+        0xff, 0x58, 4, 3, 3, 24, 8, 0xff, 0x51, 3, 0x07, 0xa1, 0x20, 0x91, 60, 100, 40, 127, 90,
+        0xff, 0x51, 3, 0x03, 0xd0, 0x90, 127, 0xb1, 118, 0, 100, 0xff, 0x58, 4, 6, 2, 24, 8, 127, 127,
+        0xff, 0x58, 4, 2, 1, 24, 8, 127, 60, 0xff, 0x58, 4, 5, 0, 24, 8, 0xff, 0x51, 3, 0x00, 0x40, 0x00, 127,
+        0xb1, 118, 0, 0xff, 0x51, 3, 0x0f, 0x42, 0x40, 0xff, 0x58, 4, 7, 4, 24, 8, 127, 127, 127, 0xff, 0x2f, 0
+    ];
+
+    /// <summary>Compares beat and measure queries on every service while tempo, meter and resets change.</summary>
+    [Fact]
+    public void BeatAndMeasureCountsFollowTempoMeterAndResets()
+    {
+        using var pair = new MusicPair(MusicProfile.AdLib);
+        var data = Fixtures.Xmi([0xc1, 68, .. BeatEvents]);
+        pair.Native.Register(data);
+        using var sequence = pair.Managed.CreateSequence(XmidiFile.Load(data));
+        pair.Native.Start();
+        sequence.Start();
+        var beats = new HashSet<int>();
+        for (var tick = 1; sequence.Status != SequenceStatus.Done; tick++)
+        {
+            pair.Tick(tick);
+            Assert.Equal(pair.Native.Status, sequence.Status);
+            Assert.Equal(pair.Native.Call(179, 0, pair.Native.SequenceHandle), sequence.BeatCount);
+            Assert.Equal(pair.Native.Call(180, 0, pair.Native.SequenceHandle), sequence.MeasureCount);
+            beats.Add(sequence.BeatCount);
+        }
+
+        Assert.True(beats.Count > 3, "The script must reach several beats within a measure.");
         pair.Check();
     }
 

@@ -2,6 +2,20 @@
 
 Parity uses the AIL/32 REL105 WR drivers under `reference/REL105/RELEASE.105/WR`. Pass `--drivers` to use another copy. `LxImage` follows `DLLLOAD.C` when loading objects, pages, zero pages, internal 32-bit fixups, and exported function tables. Unsupported fixups and services fail immediately. `UnicornMachine` also limits the number of instructions in each call so invalid inputs cannot run forever.
 
+## Real-mode `.ADV` drivers
+
+`OriginalAdvMusicDriver` runs AIL 2.x real-mode music drivers, such as the A214 drivers under `reference/A214_D1` and the 1991 drivers of Star Trek: 25th Anniversary, on a 16-bit `RealModeMachine`; `--adv` selects one in the CLI. It calls them the way AIL 2.14's `call_driver` does: through the image's function index, with a far return address and the C word arguments on the stack, a far pointer as offset then segment. Results come back in DX:AX; functions that return a word leave DX undefined, so status reads use AX only.
+
+| Boundary | How the harness handles it |
+|---|---|
+| Loading | The image must carry `Copy` after its index word, as `AIL_register_driver` requires; it is copied to a paragraph at offset zero. The drivers reach their own data through CS overrides, so the harness sets no data segment. |
+| Description | `describe_driver` receives a trap for its timer-rate callback; a call into it fails the run. |
+| Initialization | `init_driver` gets the description table's default I/O, IRQ, DMA and DRQ, as Star Trek: 25th Anniversary passes them. Detection does not run. A nonzero cache size gets a guest cache through `define_cache`. |
+| BIOS data | The CRTC port word at 0463h reads 03D4h, from which the MT-32 drivers derive the retrace port. |
+| Hardware ports | The same boundaries as the REL105 drivers, below. |
+
+The A214 drivers produce the same output as their REL105 builds on the generated resources, which checks this machine against the 32-bit one.
+
 ## Music
 
 | Boundary | How the harness handles it |
@@ -11,7 +25,8 @@ Parity uses the AIL/32 REL105 WR drivers under `reference/REL105/RELEASE.105/WR`
 | MPU readiness/reset | Deterministic ready/acknowledge replies for `MPU40132.INC` transport. Channel messages and SysEx bytes execute unchanged. |
 | MT-32 retrace wait | Alternating retrace status yields one nominal 14 ms delay per original `sysex_wait` iteration. Delays are coalesced between complete messages; subsequent message timestamps honor queued waits. |
 | PAS shutdown state | The original INT 2F state lookup receives a deterministic neutral state; routing restoration remains observed. |
-| Timer service | The harness calls the original exported `serve_driver` every 83,330 .NET ticks. No emulated timer hardware is needed. |
+| PC speaker timer and gate | Port 43h accepts only control word B6h (channel 2, low then high byte, square wave); the two following port 42h bytes form one recorded divisor, repetitions included. Port 61h reads return the last written value; a write may change only bits 0 and 1, and both together, and is recorded as the gate state. |
+| Timer service | The harness calls the original exported `serve_driver` once per service period and records it as `serviceTicks` in each music result. REL105 builds use 83,330 .NET ticks (`QUANT_RATE` 120). A real-mode driver uses the period AIL 2.14's `AIL_init_driver` programs from its declared service rate, 1,000,000 / rate whole microseconds: 2,083 µs for the game's 480 Hz `PCSPKR.ADV`. No emulated timer hardware is needed. |
 | Sequence callbacks | A harness callback observes arguments; optional guest trampolines call the original stop/branch APIs. No sequencer algorithm is replaced. |
 | Timbre requests | The test compares the packed patch/bank WORD and the no-request sentinel. The MT-32 source loads a DWORD from the WORD list; adjacent-list bytes above the public patch/bank fields are discarded. |
 
@@ -47,4 +62,4 @@ The default generated VOC uses unsigned 8-bit PCM in blocks 1/2. Gold's physical
 
 ## Scope of bit equality
 
-Parity covers these digital boundaries when both implementations receive the same inputs and timing. It includes repeated OPL writes, message order, voice behavior, sample restarts, completion, and rate and mixer choices. It does not cover physical port timing, analog response, application filters, MT-32 synthesis, external decoding, or the accuracy of NukedOPL3Sharp itself.
+Parity covers these digital boundaries when both implementations receive the same inputs and timing. It includes repeated OPL writes, speaker timer reloads and gate writes, message order, voice behavior, sample restarts, completion, and rate and mixer choices. It does not cover physical port timing, analog response, application filters, MT-32 synthesis, external decoding, or the accuracy of NukedOPL3Sharp itself.

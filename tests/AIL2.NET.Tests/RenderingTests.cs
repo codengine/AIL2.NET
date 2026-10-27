@@ -12,7 +12,7 @@ public sealed class RenderingTests
 {
     /// <summary>Every FM profile, excluding externally synthesized MT-32 music.</summary>
     public static TheoryData<MusicProfile> FmProfiles =>
-        new(Enum.GetValues<MusicProfile>().Where(p => p != MusicProfile.Mt32));
+        new(Enum.GetValues<MusicProfile>().Where(p => p is not (MusicProfile.Mt32 or MusicProfile.PcSpeaker)));
 
     /// <summary>An authored finite melody with opposite pan positions.</summary>
     private static byte[] Song =>

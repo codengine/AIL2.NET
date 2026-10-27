@@ -6,15 +6,15 @@ namespace AIL2.Parity;
 
 /// <summary>A normalized output event used for ordered differential comparison.</summary>
 /// <param name="Ticks">The logical timestamp in TimeSpan ticks.</param>
-/// <param name="Kind">The output boundary name, such as opl, midi or sample.</param>
-/// <param name="A">The first kind-specific integer: chip, encoding, operation or left gain.</param>
+/// <param name="Kind">The output boundary name, such as opl, midi, speaker or sample.</param>
+/// <param name="A">The first kind-specific integer: chip, encoding, operation, left gain, divisor or gate state.</param>
 /// <param name="B">The second integer: register, channel count or right gain.</param>
 /// <param name="C">The third integer: register value, continuation flag or gain denominator.</param>
 /// <param name="Payload">Hexadecimal MIDI, decimal delay ticks, or sample rate/length/hash data.</param>
 public sealed record TraceEvent(long Ticks, string Kind, int A = 0, int B = 0, int C = 0, string? Payload = null);
 
 /// <summary>Captures Miles output. No synthesizer correctness checks exist in this harness.</summary>
-public sealed class Trace : IOplOutput, IMidiOutput, ISampleOutput
+public sealed class Trace : IOplOutput, IMidiOutput, ISpeakerOutput, ISampleOutput
 {
     /// <summary>Gets the complete ordered event list, retained without deduplication.</summary>
     public List<TraceEvent> Events { get; } = [];
@@ -47,6 +47,18 @@ public sealed class Trace : IOplOutput, IMidiOutput, ISampleOutput
     public void Delay(TimeSpan time, TimeSpan duration)
     {
         Events.Add(new TraceEvent(time.Ticks, "delay", Payload: duration.Ticks.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    /// <inheritdoc />
+    public void SetDivisor(TimeSpan time, ushort divisor)
+    {
+        Events.Add(new TraceEvent(time.Ticks, "speaker", divisor));
+    }
+
+    /// <inheritdoc />
+    public void SetGate(TimeSpan time, bool on)
+    {
+        Events.Add(new TraceEvent(time.Ticks, "speaker-gate", on ? 1 : 0));
     }
 
     /// <inheritdoc />

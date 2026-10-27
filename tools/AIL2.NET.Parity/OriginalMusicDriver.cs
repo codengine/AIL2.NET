@@ -6,7 +6,7 @@ using AIL2.Formats;
 namespace AIL2.Parity;
 
 /// <summary>Runs original REL105 musical algorithms; substitutes only external machine boundaries.</summary>
-public sealed class OriginalMusicDriver : IDisposable
+public sealed class OriginalMusicDriver : IOriginalMusicDriver
 {
     /// <summary>The copied and relocated original LX module.</summary>
     private readonly LxImage _image;
@@ -14,23 +14,8 @@ public sealed class OriginalMusicDriver : IDisposable
     /// <summary>The isolated guest executing original instructions.</summary>
     private readonly UnicornMachine _machine;
 
-    /// <summary>The ordered output comparison trace.</summary>
-    private readonly Trace _trace;
-
-    /// <summary>The original driver profile used to interpret external boundaries.</summary>
-    private readonly MusicProfile _profile;
-
-    /// <summary>The last address selected on each guest OPL address port.</summary>
-    private readonly Dictionary<uint, byte> _selected = [];
-
-    /// <summary>Guest MIDI bytes awaiting a complete message.</summary>
-    private readonly List<byte> _message = [];
-
-    /// <summary>The alternating retrace response used only for original MT-32 wait loops.</summary>
-    private bool _retrace;
-
-    /// <summary>Pending wait ticks and the paced MIDI output timestamp.</summary>
-    private long _pendingDelay, _outputTicks;
+    /// <summary>The substituted OPL, MPU and retrace hardware feeding the comparison trace.</summary>
+    private readonly MusicBoundary _boundary;
 
     /// <summary>The guest state address for the most recently registered sequence.</summary>
     private uint _state;
@@ -42,10 +27,18 @@ public sealed class OriginalMusicDriver : IDisposable
     public int EventOffset => checked((int)(_machine.ReadUInt32(_state + 12) - _machine.ReadUInt32(_state + 8) - 8));
 
     /// <summary>Gets or sets the logical timestamp assigned by the comparison schedule.</summary>
-    public TimeSpan Time { get; set; }
+    public TimeSpan Time
+    {
+        get => _boundary.Time;
+        set => _boundary.Time = value;
+    }
 
     /// <summary>Gets the most recently registered guest sequence handle.</summary>
     public uint SequenceHandle { get; private set; }
+
+    /// <inheritdoc/>
+    /// <remarks>XMIDI32.ASM builds every REL105 music driver for QUANT_RATE 120, one service per 8,333 microseconds.</remarks>
+    public TimeSpan ServicePeriod => TimeSpan.FromTicks(83_330);
 
     /// <summary>Maps a profile to its supplied REL105 WR module filename.</summary>
     /// <param name="profile">The original music policy.</param>
@@ -60,6 +53,7 @@ public sealed class OriginalMusicDriver : IDisposable
             MusicProfile.SoundBlasterPro2 => "A32SP2FM.DLL", MusicProfile.ProAudioSpectrum => "A32PASFM.DLL",
             MusicProfile.ProAudioSpectrumOpl3 => "A32PASOP.DLL",
             MusicProfile.AdLibGold => "A32ALGFM.DLL", MusicProfile.Mt32 => "A32MT32.DLL",
+            MusicProfile.PcSpeaker => "A32SPKR.DLL",
             _ => throw new ArgumentOutOfRangeException(nameof(profile))
         };
     }
@@ -80,8 +74,7 @@ public sealed class OriginalMusicDriver : IDisposable
         bool repairMt32Stack = true,
         string? driverDirectory = null)
     {
-        _profile = profile;
-        _trace = trace;
+        _boundary = new MusicBoundary(profile, trace);
         _image = new LxImage(File.ReadAllBytes(
             Path.Combine(driverDirectory ?? Path.Combine(root, "reference/REL105/RELEASE.105/WR"), FileName(profile))));
         _machine = new UnicornMachine(_image);
@@ -107,8 +100,8 @@ public sealed class OriginalMusicDriver : IDisposable
             _machine.Write(address, [0x58, 0x90]);
         }
 
-        _machine.ReadPort = ReadPort;
-        _machine.WritePort = WritePort;
+        _machine.ReadPort = _boundary.ReadPort;
+        _machine.WritePort = _boundary.WritePort;
         _machine.Interrupt = Interrupt;
         var io = profile switch
         {
@@ -122,136 +115,6 @@ public sealed class OriginalMusicDriver : IDisposable
         {
             Call(154, 0, _machine.Allocate((int)cache), cache);
         }
-    }
-
-    /// <summary>Supplies only the documented external status responses required by this music driver.</summary>
-    /// <param name="port">The guest input port.</param>
-    /// <param name="size">The access width in bytes.</param>
-    /// <returns>The modeled status byte.</returns>
-    /// <exception cref="InvalidOperationException">The access width or port is outside the documented oracle boundaries.</exception>
-    private uint ReadPort(uint port, int size)
-    {
-        if (size != 1)
-        {
-            throw new InvalidOperationException($"Unexpected input width {size}.");
-        }
-
-        if (port == 0x3da && _profile == MusicProfile.Mt32)
-        {
-            _retrace = !_retrace;
-            if (!_retrace)
-            {
-                _pendingDelay += 140_000;
-            }
-
-            return _retrace ? 8u : 0u;
-        }
-
-        if (_profile == MusicProfile.Mt32 && port is 0x330 or 0x331)
-        {
-            return port == 0x330 ? 0xfeu : 0u;
-        }
-
-        return OplPort(port) is { Data: false } ? (uint)0 : throw new InvalidOperationException($"Unexpected IN {port:X}.");
-    }
-
-    /// <summary>Translates profile-specific guest OPL ports to independent chip/register-bank identities.</summary>
-    /// <param name="port">The guest port address.</param>
-    /// <returns>The chip, register bank and data/address flag, or null for a non-OPL port.</returns>
-    private (int Chip, int Bank, bool Data)? OplPort(uint port)
-    {
-        uint first = _profile switch
-        {
-            MusicProfile.SoundBlaster => 0x228,
-            MusicProfile.SoundBlasterPro1 or MusicProfile.SoundBlasterPro2 => 0x220, _ => 0x388
-        };
-        if (_profile == MusicProfile.Mt32)
-        {
-            return null;
-        }
-
-        if (port < first || port > first + (_profile.IsOpl3() || _profile.IsDualOpl2() ? 3 : 1))
-        {
-            return null;
-        }
-
-        var bank = (int)((port - first) / 2);
-        return (_profile.IsDualOpl2() ? bank : 0, _profile.IsOpl3() ? bank : 0, (port & 1) != 0);
-    }
-
-    /// <summary>Emits accumulated original MT-32 waits as one logical delay boundary.</summary>
-    private void FlushDelay()
-    {
-        if (_pendingDelay == 0)
-        {
-            return;
-        }
-
-        _outputTicks = Math.Max(_outputTicks, Time.Ticks);
-        _trace.Delay(TimeSpan.FromTicks(_outputTicks), TimeSpan.FromTicks(_pendingDelay));
-        _outputTicks += _pendingDelay;
-        _pendingDelay = 0;
-    }
-
-    /// <summary>Captures original OPL/MIDI output and permits only documented transport commands.</summary>
-    /// <param name="port">The guest output port.</param>
-    /// <param name="size">The access width in bytes.</param>
-    /// <param name="value">The guest output value.</param>
-    /// <exception cref="InvalidOperationException">The width, command or port is outside the documented oracle boundaries.</exception>
-    private void WritePort(uint port, int size, uint value)
-    {
-        if (size != 1)
-        {
-            throw new InvalidOperationException($"Unexpected output width {size}.");
-        }
-
-        switch (_profile)
-        {
-            case MusicProfile.Mt32 when port == 0x331:
-            {
-                if (value is not (0xff or 0x3f))
-                {
-                    throw new InvalidOperationException($"Unexpected MPU command {value:X}.");
-                }
-
-                return;
-            }
-            case MusicProfile.Mt32 when port == 0x330:
-            {
-                FlushDelay();
-                _message.Add((byte)value);
-                var status = _message[0];
-                if (status == 0xf0 ? value == 0xf7 : _message.Count == ((status & 0xf0) is 0xc0 or 0xd0 ? 2 : 3))
-                {
-                    _trace.SendMessage(TimeSpan.FromTicks(Math.Max(_outputTicks, Time.Ticks)),
-                        CollectionsMarshal.AsSpan(_message));
-                    _message.Clear();
-                }
-
-                return;
-            }
-        }
-
-        if (OplPort(port) is { } opl)
-        {
-            if (!opl.Data)
-            {
-                _selected[port] = (byte)value;
-            }
-            else
-            {
-                _trace.WriteRegister(Time, opl.Chip, (ushort)((opl.Bank * 256) + _selected[port - 1]), (byte)value);
-            }
-
-            return;
-        }
-
-        if (port == 0xb88 && _profile == MusicProfile.ProAudioSpectrum && value == 128)
-        {
-            return; // Restore PAS single-chip routing at shutdown.
-        }
-
-        throw new InvalidOperationException($"Unexpected OUT {port:X}={value:X}.");
     }
 
     /// <summary>Substitutes the documented PAS service and rejects other guest interrupts.</summary>
@@ -284,7 +147,7 @@ public sealed class OriginalMusicDriver : IDisposable
     public uint Call(int function, params uint[] arguments)
     {
         var result = _machine.Call(_image.Functions[function], arguments);
-        FlushDelay();
+        _boundary.FlushDelay();
         return result;
     }
 
@@ -376,6 +239,12 @@ public sealed class OriginalMusicDriver : IDisposable
     public void Start()
     {
         Call(170, 0, SequenceHandle);
+    }
+
+    /// <summary>Stops the most recently registered original sequence.</summary>
+    public void Stop()
+    {
+        Call(171, 0, SequenceHandle);
     }
 
     /// <summary>Gets status directly from the most recently registered guest sequence state.</summary>

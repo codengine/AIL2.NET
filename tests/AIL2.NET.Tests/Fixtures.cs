@@ -151,7 +151,7 @@ internal sealed class MusicPair : IDisposable
     public MusicPair(MusicProfile profile, bool preload = true)
     {
         Native = new OriginalMusicDriver(Fixtures.Root, profile, NativeTrace);
-        Managed = new AILSession(profile, oplOutput: ManagedTrace, midiOutput: ManagedTrace);
+        Managed = new AILSession(profile, oplOutput: ManagedTrace, midiOutput: ManagedTrace, speakerOutput: ManagedTrace);
         if (preload)
         {
             var bank = Fixtures.Bank(profile);

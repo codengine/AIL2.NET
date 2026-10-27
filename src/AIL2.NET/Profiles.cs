@@ -27,7 +27,13 @@ public enum MusicProfile
     AdLibGold = 6,
 
     /// <summary>MT-32 MIDI/SysEx output; the host supplies transport and synthesis.</summary>
-    Mt32 = 7
+    Mt32 = 7,
+
+    /// <summary>
+    ///     IBM PC internal speaker: one square-wave voice playing MIDI channel 2 (zero-based 1); the host renders the timer
+    ///     output.
+    /// </summary>
+    PcSpeaker = 8
 }
 
 /// <summary>Selects Miles sample-playback behavior without emulating a physical device.</summary>
@@ -169,6 +175,22 @@ public interface IMidiOutput
     void Delay(TimeSpan time, TimeSpan duration);
 }
 
+/// <summary>Receives the PC speaker driver's timer and speaker-gate writes in order.</summary>
+public interface ISpeakerOutput
+{
+    /// <summary>Accepts a reload of PIT channel 2 in square-wave mode: control word B6h, then the 16-bit count.</summary>
+    /// <param name="time">The logical session timestamp.</param>
+    /// <param name="divisor">The count loaded into PIT channel 2; the tone is the PIT clock divided by it.</param>
+    /// <remarks>Preserve repeated calls. The AIL 1991 driver reprograms the timer on every pitch update, even with an unchanged count.</remarks>
+    void SetDivisor(TimeSpan time, ushort divisor);
+
+    /// <summary>Connects or disconnects the speaker from PIT channel 2, as bits 0 and 1 of port 61h.</summary>
+    /// <param name="time">The logical session timestamp.</param>
+    /// <param name="on">True when the driver sets both bits; false when it clears both.</param>
+    /// <remarks>The driver writes the gate on every pitch update and note release, so repeated states occur.</remarks>
+    void SetGate(TimeSpan time, bool on);
+}
+
 /// <summary>Consumes sample blocks on the session thread. The session owns the block memory and keeps it immutable.</summary>
 /// <remarks>For external decoding, report logical completion through SamplePlayback.CompleteBlock on the session thread.</remarks>
 public interface ISampleOutput
@@ -228,16 +250,19 @@ public static class MusicProfiles
         }
 
         /// <summary>Returns the conventional bank suffix associated with a profile.</summary>
-        /// <returns>The suffix .ad, .opl or .mt, including the dot.</returns>
+        /// <returns>
+        ///     The suffix .ad, .opl or .mt, including the dot, or an empty string for the PC speaker, whose driver uses
+        ///     no timbres and names no global timbre library.
+        /// </returns>
         /// <remarks>The application chooses the bank. This convention does not identify, select or convert instrument content.</remarks>
         public string BankExtension()
         {
-            if (profile == MusicProfile.Mt32)
+            return profile switch
             {
-                return ".mt";
-            }
-
-            return profile.IsOpl3() ? ".opl" : ".ad";
+                MusicProfile.Mt32 => ".mt",
+                MusicProfile.PcSpeaker => "",
+                _ => profile.IsOpl3() ? ".opl" : ".ad"
+            };
         }
     }
 }

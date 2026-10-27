@@ -20,11 +20,19 @@ using var session = new AILSession(
 
 An OPL3 choice resolves to the source's Sound Blaster Pro 2 musical behavior; OPL2 resolves to SBFM; dual OPL2 resolves to the Pro 1 driver. This selection controls available operator topology and source stereo interpretation. The bank independently selects instrument definitions. An OPL3 session can use a two-operator `.ad` bank.
 
+The optional third argument selects the driver release. `DriverRevision.Ail214`, the default, follows the AIL 2.14 and AIL/32 1.05 sources; its beat and measure queries follow AIL/32 1.05, which starts at measure 65535 where the 16-bit AIL 2.14 drivers report 0. `DriverRevision.Ail1991` follows the 1991 drivers shipped with Star Trek: 25th Anniversary for AdLib and Sound Blaster OPL2, Sound Blaster dual OPL2, MT-32 and the PC speaker (the game's `PASFM.ADV` is byte-identical to its `SBFM.ADV`); `SupportedChips(device, revision)` lists what a release offers, and `DriverProfile` rejects the rest. `AILSession.MusicConfiguration` reports the release in use. Under the 1991 release, `BeatCount` and `MeasureCount` report the 1991 counts, which start at measure 0 and do not look ahead, and the speaker is serviced every 2,083 µs, the 480 Hz rate its driver declares.
+
+```csharp
+var startrek = new MusicConfiguration(MusicDevice.PcSpeaker, null, DriverRevision.Ail1991);
+using var speaker = new AILSession(startrek, speakerOutput: hostSpeakerSink);
+```
+
 | AIL contract | Host responsibility |
 |---|---|
 | `IOplOutput.WriteRegister` | Route ordered writes to the selected chip instance and preserve their timestamps. Dual OPL2 needs two independent chip spaces. |
 | `SetOplLevels` / `SetSampleLevels` | Apply the AIL mixer settings once. Add any application-specific filters afterward. |
 | `IMidiOutput` | Copy complete MIDI/SysEx messages and schedule delivery/delays; select an external MT-32 transport or synthesizer. |
+| `ISpeakerOutput` | Load each divisor into PIT channel 2 (square wave) of the host's speaker model and connect the speaker while the gate is on. Keep repeated calls: the 1991 driver reloads the timer on every pitch update, and AIL 2.14 sets the gate on every update. |
 | `ISampleOutput` | Accept read-only blocks owned by the session, along with their PCM layout, rate, continuation state, and controls. Advertise only supported encodings. |
 | Compressed completion | Decode externally, advance the session to logical completion, then call `CompleteBlock` on the owning thread. |
 | `AdvanceTo` | Supply monotonically increasing logical time from the host's audio/timing service. |
@@ -32,7 +40,7 @@ An OPL3 choice resolves to the source's Sound Blaster Pro 2 musical behavior; OP
 
 A host may have multiple music interpreters using the same synthesizer. Select the interpreter independently from its output hardware. A Miles adapter should expose its own audio path, resolve device/chip choices into `MusicConfiguration`, and request sampled and MIDI capabilities independently.
 
-Report unsupported capabilities to the caller: one OPL chip cannot provide dual OPL2 routing, a PCM-only consumer cannot accept encoded ADPCM, and an MT-32 message sink does not synthesize audio. DOS transport code is not needed for any of these cases.
+Report unsupported capabilities to the caller: one OPL chip cannot provide dual OPL2 routing, a PCM-only consumer cannot accept encoded ADPCM, an MT-32 message sink does not synthesize audio, and `AILRenderer` refuses the PC speaker because it has no speaker synthesis. DOS transport code is not needed for any of these cases.
 
 ## Complete console export example
 
@@ -77,7 +85,7 @@ Construct, control, query and dispose a session and its handles on one thread. T
 
 `CreateSequence` selects a zero-based resource index and allocates one of the eight original handles. `Start` rewinds and restores source defaults. `Pause` and `Stop` release active notes while preserving a resumable position; `Resume` restores logged controls without replaying those notes. End-of-track produces `Done`; use `Start` to replay it. Tempo and relative volume accept nonnegative percentages, including values above 100. Output volume follows source saturation arithmetic. Ramp durations are nonnegative.
 
-MIDI channels in the managed sequence API are zero-based, from 0 through 15. `LockChannel` returns a reserved channel or -1; `ReleaseChannel` restores source logged state. The MIDI-effect helper preserves its original one-based message-channel quirk, while `MidiEffect.Channel` reports the zero-based reservation.
+MIDI channels in the managed sequence API are zero-based, from 0 through 15. The PC speaker plays only channel 1. `LockChannel` returns a reserved channel or -1, choosing from channels 1 through 8, or only channel 1 on the PC speaker; `ReleaseChannel` restores source logged state. The MIDI-effect helper preserves its original one-based message-channel quirk, while `MidiEffect.Channel` reports the zero-based reservation.
 
 `Timbres` changes the source for missing definitions; it does not invalidate resident instruments. `PrepareTimbres` follows the track's TIMB request order. `LoadTimbreBank` preloads in index order with normal eviction. Installations under a resident key retain that definition. A fresh session is needed to replace instruments under the same keys; the player does this when bank content changes.
 

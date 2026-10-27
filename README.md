@@ -1,6 +1,7 @@
 # AIL2.NET
 
-AIL2.NET provides managed AIL/32 sequencing, FM interpretation, MT-32 messages, and PCM/VOC playback. The repository also
+AIL2.NET provides managed AIL/32 sequencing, FM interpretation, MT-32 messages, PC speaker timer output, and PCM/VOC
+playback. Besides AIL 2.14, it follows the 1991 drivers shipped with Star Trek: 25th Anniversary. The repository also
 includes an Avalonia player. Open `AIL2.NET.slnx`.
 
 [![NuGet](https://img.shields.io/nuget/v/AIL2.NET.svg)](https://www.nuget.org/packages/AIL2.NET)
@@ -27,9 +28,11 @@ dotnet run --project src/AIL2.NET.Player -c Release
 The player needs an available OpenAL audio device. Original-code tests additionally require Node.js and GCC. NuGet
 supplies Unicorn 2 on supported Linux and macOS targets. Run parity on Linux x64; Unicorn 2.1.3 currently terminates
 under the Windows .NET test host because of
-its [Control Flow Guard incompatibility](https://github.com/unicorn-engine/unicorn/issues/2281). The REL105 WR drivers
-and A214 `SOUNDFX.C` are included. No game assets are required: tests and default harness scenarios generate their own
-resources.
+its [Control Flow Guard incompatibility](https://github.com/unicorn-engine/unicorn/issues/2281). The REL105 WR drivers,
+the A214 `.ADV` drivers and A214 `SOUNDFX.C` are included. No game assets are required: tests and default harness
+scenarios generate their own resources. Tests of the 1991 drivers also play Star Trek: 25th Anniversary's own drivers
+and songs when they are copied to the ignored `game_files/st25th/` (`drivers/*.ADV`, `music/*`); otherwise they are
+skipped.
 
 ## NativeAOT
 
@@ -63,9 +66,12 @@ imply four-operator instruments or the same sound as another bank.
 | Pro Audio Spectrum | OPL3        | PAS OPL3                    |
 | AdLib Gold         | OPL3        | AdLib Gold                  |
 | Roland MT-32       | No OPL chip | MT-32 messages              |
+| IBM PC speaker     | No OPL chip | PC speaker timer output     |
 
 OPL3 modes accept two-operator `.ad` instruments and four-operator instruments. OPL2 modes reject four-operator
-definitions. The digital profile is a separate choice for sampled effects.
+definitions. The digital profile is a separate choice for sampled effects. The speaker uses no instruments; it plays
+only MIDI channel 2 (zero-based channel 1) and reports timer divisors and speaker on/off through `ISpeakerOutput`. The player and `AILRenderer` do
+not synthesize it.
 
 The player keeps the selected bank when it is compatible with the new chip mode. Loading different bank contents resets
 playback and the instrument cache, while changing tracks with the same bank keeps the current session.
@@ -96,6 +102,10 @@ sequence.Start();
 session.AdvanceTo(TimeSpan.FromSeconds(1));
 ```
 
+A third argument, `DriverRevision.Ail1991`, follows the 1991 drivers instead of AIL 2.14, for AdLib and Sound Blaster
+OPL2, Sound Blaster dual OPL2, MT-32 and the PC speaker. The game's `PASFM.ADV` is byte-identical to its `SBFM.ADV`, so
+Sound Blaster OPL2 covers it.
+
 For standalone PCM rendering, construct `AILRenderer` with that configuration and call `Render(Span<short>)` with an
 interleaved stereo buffer. The default is 48 kHz. For sampled effects, use `CreateSample(VocFile)` or create a
 `SampleBuffer` with a `SampleFormat`. The session owns the buffer data. `ReplaceBuffer` stops the current sample before
@@ -112,8 +122,8 @@ the callback. Dispose playback objects and sessions on their creating thread. Re
 
 `AdvanceTo` processes due sample completions, XMIDI services, then MIDI-effect services in deterministic order. XMIDI
 triggers run synchronously at their original event boundary and may stop, branch or otherwise control a sequence.
-Recursive advancement and backwards time are rejected. Default service periods are the source's 8,333 µs for music and
-10 ms for the sound-effect helper.
+Recursive advancement and backwards time are rejected. Music is serviced at the driver's interval, the source's 8,333 µs,
+or 2,083 µs (480 Hz) for the 1991 PC speaker driver. The sound-effect helper runs every 10 ms.
 
 The sample consumer declares format support. Uncompressed PCM completes automatically on the session timeline.
 Compressed bytes are forwarded unchanged only to a capable consumer; that consumer advances the session to its
@@ -146,11 +156,13 @@ scanned recursively; bank names need not match track names. All relative paths r
 dotnet run --project tools/AIL2.NET.Parity -c Release -- --input /path/to/music.xmi --profile SoundBlasterPro2 --bank /path/to/instruments.ad
 dotnet run --project tools/AIL2.NET.Parity -c Release -- --input /path/to/music --profile all --bank-ad /path/to/fm.bank --bank-opl /path/to/opl3.bank --bank-mt /path/to/mt32.bank
 dotnet run --project tools/AIL2.NET.Parity -c Release -- --samples --input /path/to/effects
+dotnet run --project tools/AIL2.NET.Parity -c Release -- --adv /path/to/ADLIB.ADV --profile AdLib --revision Ail1991 --input /path/to/TITLE.AD --bank /path/to/GTL.AD
 ```
 
-Use `--drivers /path/to/REL105/WR` to select an external original-driver directory, `--sequence INDEX` to select one
-sequence, `--marker NUMBER` for marked VOC resources, and `--help` for other options. External music inputs require an
-explicit compatible bank. Missing inputs, empty directories, sample selections with no played blocks, unsupported
+Use `--drivers /path/to/REL105/WR` to select an external original-driver directory, `--adv FILE` to compare against a
+real-mode AIL 2.x `.ADV` music driver instead, `--revision NAME` to choose the library's `DriverRevision`, `--sequence
+INDEX` to select one sequence, `--marker NUMBER` for marked VOC resources, and `--help` for other options. External music
+inputs require an explicit compatible bank, except on the PC speaker. Missing inputs, empty directories, sample selections with no played blocks, unsupported
 resources and oracle failures return a failing exit code. Sample corpus runs require finite VOC playback; compressed
 completion is tested through an explicit external-consumer schedule, without decoding.
 

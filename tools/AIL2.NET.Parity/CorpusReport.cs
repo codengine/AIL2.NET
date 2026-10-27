@@ -7,7 +7,9 @@ namespace AIL2.Parity;
 /// <param name="root">The workspace containing the local artifacts directory.</param>
 /// <param name="name">The report basename without an extension.</param>
 /// <param name="arguments">The exact harness arguments used for this run.</param>
-internal sealed class CorpusReport(string root, string name, string[] arguments)
+/// <param name="baseline">The original code the run compares against.</param>
+/// <param name="repair">The documented change applied to that original code, or null when it runs unchanged.</param>
+internal sealed class CorpusReport(string root, string name, string[] arguments, string baseline, string? repair)
 {
     /// <summary>Shared indented JSON settings for report serialization.</summary>
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
@@ -45,10 +47,9 @@ internal sealed class CorpusReport(string root, string name, string[] arguments)
         Directory.CreateDirectory(directory);
         var report = new
         {
-            schema = "miles-parity/v1", passed, arguments, baseline = "AIL/32 REL105 WR",
-            musicServiceTicks = 83330, effectServiceTicks = 100000, nominalMt32WaitTicks = 140000,
-            mt32OracleRepair = "User-authorized POP EAX; NOP at loaded offset 0x989; untouched binary remains tested.",
-            results = Results
+            schema = "miles-parity/v2", passed, arguments, baseline,
+            effectServiceTicks = 100000, nominalMt32WaitTicks = 140000,
+            mt32OracleRepair = repair, results = Results
         };
         File.WriteAllText(Path.Combine(directory, name + ".json"), JsonSerializer.Serialize(report, JsonOptions));
     }

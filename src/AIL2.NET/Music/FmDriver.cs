@@ -1,6 +1,12 @@
 namespace AIL2.Music;
 
 /// <summary>Managed port of REL105 YAMAHA32.INC musical behavior and original register ordering.</summary>
+/// <remarks>
+///     The 1991 release differs in two places. Its drivers remember the last value written to each register and skip a
+///     write that would repeat it; the register reset still writes everything. On dual OPL2 one remembered value covers
+///     both chips, and the per-chip panned levels are always written without being remembered. A new note also takes
+///     the lowest free voice instead of the voice after the last assignment.
+/// </remarks>
 internal sealed class FmDriver : MusicDriver
 {
     /// <summary>Original dirty-bit masks controlling operator, level, envelope, waveform, feedback, and pitch writes.</summary>
@@ -39,14 +45,21 @@ internal sealed class FmDriver : MusicDriver
     /// <summary>Current OPL3 four-operator connection mask.</summary>
     private byte _connections;
 
+    /// <summary>The driver release whose behavior this driver follows.</summary>
+    private readonly DriverRevision _revision;
+
+    /// <summary>The last value written to each register, for the 1991 release only; null otherwise.</summary>
+    private readonly byte[]? _shadow;
+
     /// <inheritdoc />
     public override int CacheCapacity => 3584;
 
-    /// <summary>Allocates the original FM state for the selected topology.</summary>
+    /// <summary>Allocates the original FM state for the selected topology and release.</summary>
     /// <param name="session">The owning session.</param>
     /// <param name="profile">The Miles FM music profile.</param>
+    /// <param name="revision">The driver release; Ail1991 is valid only for the OPL2 and dual OPL2 profiles.</param>
     /// <param name="output">The caller-owned output sink.</param>
-    public FmDriver(AILSession session, MusicProfile profile, IOplOutput output) : base(session)
+    public FmDriver(AILSession session, MusicProfile profile, DriverRevision revision, IOplOutput output) : base(session)
     {
         _profile = profile;
         _output = output;
@@ -54,14 +67,31 @@ internal sealed class FmDriver : MusicDriver
         _dual = profile.IsDualOpl2();
         _slots = Enumerable.Range(0, _opl3 ? 20 : 16).Select(_ => new Voice()).ToArray();
         _owners = Enumerable.Repeat(-1, _opl3 ? 18 : 9).ToArray();
+        _revision = revision;
+        _shadow = revision == DriverRevision.Ail1991 ? new byte[256] : null;
     }
 
     /// <summary>Emits a register write, duplicating it for dual OPL2 when requested.</summary>
     /// <param name="register">The chip-local register address.</param>
     /// <param name="value">The value narrowed to the byte width used by the original driver.</param>
     /// <param name="chip">The chip index to use, or -1 for the profile's default routing.</param>
-    private void Write(int register, int value, int chip = -1)
+    /// <param name="raw">Whether to write even an unchanged value; only the 1991 reset passes true.</param>
+    /// <remarks>
+    ///     In the 1991 release a default-routed write that repeats the remembered value is skipped. An explicit chip
+    ///     bypasses the remembered values, as the 1991 dual OPL2 panned-level writes do.
+    /// </remarks>
+    private void Write(int register, int value, int chip = -1, bool raw = false)
     {
+        if (_shadow is not null && chip < 0)
+        {
+            if (!raw && _shadow[register] == (byte)value)
+            {
+                return;
+            }
+
+            _shadow[register] = (byte)value;
+        }
+
         if (_dual && chip < 0)
         {
             _output.WriteRegister(Session.Time, 0, (ushort)register, (byte)value);
@@ -104,7 +134,7 @@ internal sealed class FmDriver : MusicDriver
 
         for (var i = 0; i < FmTables.Array0Init.Length; i++)
         {
-            Write(i + 1, FmTables.Array0Init[i]);
+            Write(i + 1, FmTables.Array0Init[i], raw: true);
         }
 
         if (_opl3)
@@ -441,16 +471,23 @@ internal sealed class FmDriver : MusicDriver
         }
     }
 
-    /// <summary>Searches the rotating voice pool, then applies the original stealing priorities.</summary>
+    /// <summary>Searches the voice pool, then applies the original stealing priorities.</summary>
     /// <param name="slot">The active note awaiting a synthesizer voice.</param>
+    /// <remarks>AIL 2.14 rotates the search start; the 1991 release always starts at the first voice.</remarks>
     private void Assign(Voice slot)
     {
         var limit = slot.FourOperator ? 6 : _owners.Length;
         for (var i = 0; i < limit; i++)
         {
-            var voice = slot.FourOperator
-                ? FmTables.Op4Voice[_rover4 = (_rover4 + 1) % 6]
-                : _rover2 = (_rover2 + 1) % _owners.Length;
+            int voice;
+            if (slot.FourOperator)
+            {
+                voice = FmTables.Op4Voice[_rover4 = (_rover4 + 1) % 6];
+            }
+            else
+            {
+                voice = _revision == DriverRevision.Ail1991 ? i : _rover2 = (_rover2 + 1) % _owners.Length;
+            }
             if (_owners[voice] >= 0 || (slot.FourOperator && _owners[voice + 3] >= 0))
             {
                 continue;

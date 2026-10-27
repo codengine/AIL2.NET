@@ -16,8 +16,8 @@ public sealed class AILSession : IDisposable
     /// <summary>Lifetime and recursive-advancement guards.</summary>
     private bool _disposed, _advancing;
 
-    /// <summary>Next music and effect deadlines in TimeSpan ticks.</summary>
-    private long _nextMusic = 83_330, _nextEffects = 100_000;
+    /// <summary>Next music and effect deadlines in TimeSpan ticks; the first music deadline is one driver interval.</summary>
+    private long _nextMusic, _nextEffects = 100_000;
 
     /// <summary>The eight original sequence slots; null marks an available slot.</summary>
     internal readonly XmidiSequence?[] Sequences = new XmidiSequence?[8];
@@ -39,7 +39,7 @@ public sealed class AILSession : IDisposable
     /// <summary>Original AIL initialization values corresponding to LoggedControls.</summary>
     internal static readonly byte[] DefaultControls = [127, 0, 64, 127, 0, 0, 0, 0, 0];
 
-    /// <summary>Original AIL program defaults for channels 1 through 9; 255 skips a channel.</summary>
+    /// <summary>Original AIL program defaults from channel 1 upward; 255 skips a channel.</summary>
     internal static readonly byte[] DefaultPrograms = [68, 48, 95, 78, 41, 3, 110, 122, 255];
 
     /// <summary>The selected music profile, or null when music is disabled.</summary>
@@ -54,9 +54,14 @@ public sealed class AILSession : IDisposable
     /// <summary>Gets the music profile selected at construction, or null when music is disabled.</summary>
     public MusicProfile? MusicProfile { get; }
 
-    /// <summary>Gets the equivalent device/chip selection, or null when music is disabled.</summary>
+    /// <summary>Gets the driver release whose music behavior this session follows.</summary>
+    internal DriverRevision Revision { get; }
+
+    /// <summary>Gets the equivalent device, chip and release selection, or null when music is disabled.</summary>
     public MusicConfiguration? MusicConfiguration =>
-        MusicProfile is { } profile ? AIL2.MusicConfiguration.FromDriverProfile(profile) : null;
+        MusicProfile is { } profile
+            ? AIL2.MusicConfiguration.FromDriverProfile(profile) with { Revision = Revision }
+            : null;
 
     /// <summary>Gets the sample profile selected at construction, or null when samples are disabled.</summary>
     public DigitalProfile? DigitalProfile { get; }
@@ -92,33 +97,38 @@ public sealed class AILSession : IDisposable
     public event Action<XmidiSequence, byte>? Trigger;
 
     /// <summary>Creates a session and sends initialization output before returning.</summary>
-    /// <param name="music">The fixed device and chip selection.</param>
+    /// <param name="music">The fixed device, chip and driver release selection.</param>
     /// <param name="digitalProfile">The sample profile, or null to disable samples.</param>
     /// <param name="oplOutput">The caller-owned OPL sink, required for FM music.</param>
     /// <param name="midiOutput">The caller-owned MIDI sink, required for MT-32.</param>
     /// <param name="sampleOutput">The caller-owned sample sink, required when samples are enabled.</param>
+    /// <param name="speakerOutput">The caller-owned speaker sink, required for the PC speaker.</param>
     /// <remarks>The session owns playback handles but does not dispose sinks.</remarks>
-    /// <exception cref="NotSupportedException">The device and chip combination has no matching driver profile.</exception>
+    /// <exception cref="NotSupportedException">The combination has no matching driver profile in the selected release.</exception>
     /// <exception cref="ArgumentOutOfRangeException">digitalProfile is undefined.</exception>
     /// <exception cref="ArgumentNullException">A sink required by the selected profiles is null.</exception>
     public AILSession(MusicConfiguration music,
         DigitalProfile? digitalProfile = null,
         IOplOutput? oplOutput = null,
         IMidiOutput? midiOutput = null,
-        ISampleOutput? sampleOutput = null) : this(music.DriverProfile,
+        ISampleOutput? sampleOutput = null,
+        ISpeakerOutput? speakerOutput = null) : this(music.DriverProfile,
+        music.Revision,
         digitalProfile,
         oplOutput,
         midiOutput,
-        sampleOutput)
+        sampleOutput,
+        speakerOutput)
     {
     }
 
-    /// <summary>Creates a session with independently selected music and sample profiles.</summary>
+    /// <summary>Creates a session with independently selected music and sample profiles and AIL 2.14 behavior.</summary>
     /// <param name="musicProfile">The music profile selected for this session, or null to disable music.</param>
     /// <param name="digitalProfile">The sample profile selected for this session, or null to disable samples.</param>
     /// <param name="oplOutput">The caller-owned OPL sink, required for FM music.</param>
     /// <param name="midiOutput">The caller-owned MIDI sink, required for MT-32.</param>
     /// <param name="sampleOutput">The caller-owned sample sink, required when samples are enabled.</param>
+    /// <param name="speakerOutput">The caller-owned speaker sink, required for the PC speaker.</param>
     /// <remarks>
     ///     Initialization invokes sinks before construction returns. All controls, advancement and disposal belong to
     ///     this thread. The session owns playback handles, not output sinks.
@@ -129,7 +139,34 @@ public sealed class AILSession : IDisposable
         DigitalProfile? digitalProfile = null,
         IOplOutput? oplOutput = null,
         IMidiOutput? midiOutput = null,
-        ISampleOutput? sampleOutput = null)
+        ISampleOutput? sampleOutput = null,
+        ISpeakerOutput? speakerOutput = null) : this(musicProfile,
+        DriverRevision.Ail214,
+        digitalProfile,
+        oplOutput,
+        midiOutput,
+        sampleOutput,
+        speakerOutput)
+    {
+    }
+
+    /// <summary>Creates a session for a validated profile and driver release.</summary>
+    /// <param name="musicProfile">The music profile, or null to disable music.</param>
+    /// <param name="revision">The driver release, already validated for the profile.</param>
+    /// <param name="digitalProfile">The sample profile, or null to disable samples.</param>
+    /// <param name="oplOutput">The caller-owned OPL sink, required for FM music.</param>
+    /// <param name="midiOutput">The caller-owned MIDI sink, required for MT-32.</param>
+    /// <param name="sampleOutput">The caller-owned sample sink, required when samples are enabled.</param>
+    /// <param name="speakerOutput">The caller-owned speaker sink, required for the PC speaker.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Either profile value is undefined.</exception>
+    /// <exception cref="ArgumentNullException">A sink required by the selected profiles is null.</exception>
+    private AILSession(MusicProfile? musicProfile,
+        DriverRevision revision,
+        DigitalProfile? digitalProfile,
+        IOplOutput? oplOutput,
+        IMidiOutput? midiOutput,
+        ISampleOutput? sampleOutput,
+        ISpeakerOutput? speakerOutput)
     {
         if (musicProfile is { } mp && !Enum.IsDefined(mp))
         {
@@ -142,6 +179,7 @@ public sealed class AILSession : IDisposable
         }
 
         MusicProfile = musicProfile;
+        Revision = revision;
         DigitalProfile = digitalProfile;
         SampleOutput = sampleOutput;
         if (digitalProfile is not null && sampleOutput is null)
@@ -151,9 +189,16 @@ public sealed class AILSession : IDisposable
 
         if (musicProfile is { } profile)
         {
-            Driver = profile == AIL2.MusicProfile.Mt32
-                ? new Mt32Driver(this, midiOutput ?? throw new ArgumentNullException(nameof(midiOutput)))
-                : new FmDriver(this, profile, oplOutput ?? throw new ArgumentNullException(nameof(oplOutput)));
+            Driver = profile switch
+            {
+                AIL2.MusicProfile.Mt32 => new Mt32Driver(this,
+                    midiOutput ?? throw new ArgumentNullException(nameof(midiOutput))),
+                AIL2.MusicProfile.PcSpeaker => new SpeakerDriver(this,
+                    revision,
+                    speakerOutput ?? throw new ArgumentNullException(nameof(speakerOutput))),
+                _ => new FmDriver(this, profile, revision, oplOutput ?? throw new ArgumentNullException(nameof(oplOutput)))
+            };
+            _nextMusic = Driver.Interval * 10L;
             for (var i = 0; i < 9; i++)
             {
                 for (var ch = 0; ch < 16; ch++)
@@ -165,7 +210,7 @@ public sealed class AILSession : IDisposable
             Driver.Initialize();
             for (var i = 0; i < LoggedControls.Length; i++)
             {
-                for (var ch = 1; ch <= 9; ch++)
+                for (var ch = 1; ch <= Driver.LastChannel; ch++)
                 {
                     GlobalControls[i, ch] = DefaultControls[i];
                     Driver.Send((byte)(0xb0 | ch), LoggedControls[i], DefaultControls[i]);
@@ -177,7 +222,7 @@ public sealed class AILSession : IDisposable
                 mt.Wait(10);
             }
 
-            for (var ch = 1; ch <= 9; ch++)
+            for (var ch = 1; ch <= Driver.LastChannel; ch++)
             {
                 PitchLow[ch] = 0;
                 PitchHigh[ch] = 64;
@@ -257,7 +302,7 @@ public sealed class AILSession : IDisposable
 
                 if (Driver is not null && _nextMusic == due)
                 {
-                    _nextMusic = checked(_nextMusic + 83_330);
+                    _nextMusic = checked(_nextMusic + (Driver.Interval * 10L));
                     foreach (var sequence in Sequences)
                     {
                         sequence?.Service();
@@ -446,8 +491,8 @@ public sealed class AILSession : IDisposable
     /// <summary>Locks the least-active eligible channel chosen by the original allocator.</summary>
     /// <returns>The reserved channel, or -1 when no eligible channel exists.</returns>
     /// <remarks>
-    ///     The original allocation considers channels 1 through 8 and flushes their sequence notes. ReleaseChannel
-    ///     restores logged state. Call on the owning thread.
+    ///     The original allocation considers the driver's lockable channels, 1 through 8 for FM, MT-32 and without
+    ///     music and only channel 1 for the PC speaker, and flushes their sequence notes. ReleaseChannel restores logged state. Call on the owning thread.
     /// </remarks>
     public int LockChannel()
     {
@@ -456,7 +501,7 @@ public sealed class AILSession : IDisposable
         {
             var best = -1;
             var notes = 255;
-            for (var ch = 8; ch >= 1; ch--)
+            for (var ch = Driver?.LastLockableChannel ?? 8; ch >= 1; ch--)
             {
                 if ((Locks[ch] & mask) == 0 && ActiveNotes[ch] < notes)
                 {

@@ -46,7 +46,8 @@ public static class ParityCommand
         string[] valued =
         [
             "--root", "--drivers", "--input", "--file", "--bank", "--bank-ad", "--bank-opl", "--bank-mt", "--profile",
-            "--digital", "--sequence", "--marker", "--ticks", "--report", "--keep-going", "--generate", "--dump"
+            "--digital", "--sequence", "--marker", "--ticks", "--report", "--keep-going", "--generate", "--dump", "--adv",
+            "--revision"
         ];
         for (var i = 0; i < args.Length; i++)
         {
@@ -76,7 +77,7 @@ public static class ParityCommand
         if (options.ContainsKey("--help"))
         {
             Console.WriteLine("""
-                              AIL2.NET original-code parity (Unicorn 2; original REL105 WR drivers required)
+                              AIL2.NET original-code parity (Unicorn 2; original REL105 WR or real-mode .ADV drivers)
                               No input: deterministic generated XMIDI/VOC/banks; all profiles by default.
                               --generate DIRECTORY       Write authored fixture resources and exit.
                               --input FILE|DIRECTORY     Compare an arbitrary file or recursively scan a directory.
@@ -84,7 +85,8 @@ public static class ParityCommand
                               --bank FILE                Bank for all selected music profiles.
                               --bank-ad FILE             Two-operator bank for OPL2/dual OPL2 profiles.
                               --bank-opl FILE            Bank for OPL3 profiles (two-operator banks also accepted).
-                              --bank-mt FILE             MT-32 bank. External music inputs require explicit banks.
+                              --bank-mt FILE             MT-32 bank. External music inputs require explicit banks,
+                                                         except for PcSpeaker, which uses none.
                               --profile all|NAME,...     MusicProfile enum names.
                               --samples                 Compare VOC resources instead of XMIDI.
                               --digital all|NAME,...     DigitalProfile enum names.
@@ -92,6 +94,9 @@ public static class ParityCommand
                               --marker NUMBER            Select a VOC marker (default start of resource).
                               --ticks COUNT              Music service failure budget (default 200000).
                               --drivers DIRECTORY        Original driver DLL directory.
+                              --adv FILE                 Real-mode AIL 2.x .ADV music driver for the selected profiles,
+                                                         run at its own default I/O settings; replaces --drivers.
+                              --revision NAME            DriverRevision the library follows (default Ail214).
                               --root DIRECTORY           Checkout/output root (default current directory).
                               --report NAME              Report basename below ROOT/artifacts/parity.
                               --keep-going true|false    Continue after failed cases (default false).
@@ -120,6 +125,23 @@ public static class ParityCommand
 
         var drivers = Path.GetFullPath(Option("--drivers", Path.Combine(root, "reference/REL105/RELEASE.105/WR")));
         var samples = options.ContainsKey("--samples");
+        var adv = options.GetValueOrDefault("--adv");
+        if (adv is not null)
+        {
+            if (samples)
+            {
+                throw new ArgumentException("--adv selects a music driver and cannot be combined with --samples.");
+            }
+
+            if (options.ContainsKey("--drivers"))
+            {
+                throw new ArgumentException("Use either --adv or --drivers.");
+            }
+
+            adv = Path.GetFullPath(adv);
+        }
+
+        var revision = Enum.Parse<DriverRevision>(Option("--revision", nameof(DriverRevision.Ail214)));
         var keepGoing = bool.Parse(Option("--keep-going", "false"));
         var ticks = int.Parse(Option("--ticks", "200000"), CultureInfo.InvariantCulture);
         if (ticks <= 0)
@@ -181,7 +203,13 @@ public static class ParityCommand
             throw new InvalidDataException($"No {extension} resources in {input}.");
         }
 
-        var report = new CorpusReport(root, Option("--report", samples ? "sample-corpus" : "music-corpus"), args);
+        var report = adv is null
+            ? new CorpusReport(root,
+                Option("--report", samples ? "sample-corpus" : "music-corpus"),
+                args,
+                "AIL/32 REL105 WR",
+                "User-authorized POP EAX; NOP at loaded offset 0x989; untouched binary remains tested.")
+            : new CorpusReport(root, Option("--report", "music-corpus"), args, "AIL 2.x real-mode .ADV driver", null);
         var failures = 0;
         var count = 0;
         var totalBlocks = 0;
@@ -235,22 +263,21 @@ public static class ParityCommand
             {
                 try
                 {
-                    var bankPath = options.GetValueOrDefault("--bank") ??
-                                   options.GetValueOrDefault("--bank-" + profile.BankExtension()[1..]);
-                    if (bankPath is null && synthetic)
+                    // An empty extension marks a driver that uses no timbres; it plays without a bank.
+                    var bankExtension = profile.BankExtension();
+                    var bankPath = options.GetValueOrDefault("--bank");
+                    if (bankPath is null && bankExtension.Length != 0)
                     {
-                        bankPath = Path.Combine(input!, "instruments" + profile.BankExtension());
+                        bankPath = options.GetValueOrDefault("--bank-" + bankExtension[1..]) ??
+                                   (synthetic
+                                       ? Path.Combine(input!, "instruments" + bankExtension)
+                                       : throw new ArgumentException(
+                                           $"An explicit --bank or --bank-{bankExtension[1..]} is required for {profile}."));
                     }
 
-                    if (bankPath is null)
-                    {
-                        throw new ArgumentException(
-                            $"An explicit --bank or --bank-{profile.BankExtension()[1..]} is required for {profile}.");
-                    }
-
-                    bankPath = Path.GetFullPath(bankPath);
+                    bankPath = bankPath is null ? null : Path.GetFullPath(bankPath);
                     var data = File.ReadAllBytes(file);
-                    var bank = TimbreBank.Load(File.ReadAllBytes(bankPath));
+                    var bank = TimbreBank.Load(bankPath is null ? [0, 0xff] : File.ReadAllBytes(bankPath));
                     var xmidi = XmidiFile.Load(data);
                     var selection = Option("--sequence", "all");
                     var indices = selection == "all"
@@ -265,9 +292,14 @@ public static class ParityCommand
 
                         var reference = new Trace();
                         var managed = new Trace();
-                        using var original =
-                            new OriginalMusicDriver(root, profile, reference, driverDirectory: drivers);
-                        using var session = new AILSession(profile, oplOutput: managed, midiOutput: managed);
+                        using IOriginalMusicDriver original = adv is null
+                            ? new OriginalMusicDriver(root, profile, reference, driverDirectory: drivers)
+                            : new OriginalAdvMusicDriver(adv, profile, reference);
+                        using var session = new AILSession(
+                            MusicConfiguration.FromDriverProfile(profile) with { Revision = revision },
+                            oplOutput: managed,
+                            midiOutput: managed,
+                            speakerOutput: managed);
                         session.Timbres = bank;
                         original.Load(data, bank, index);
                         session.LoadTimbreBank(bank);
@@ -277,7 +309,7 @@ public static class ParityCommand
                         var ending = "budget exhausted";
                         for (var tick = 1; tick <= ticks; tick++)
                         {
-                            var time = TimeSpan.FromTicks(tick * 83_330L);
+                            var time = TimeSpan.FromTicks(tick * original.ServicePeriod.Ticks);
                             original.Time = time;
                             original.Service();
                             session.AdvanceTo(time);
@@ -302,7 +334,7 @@ public static class ParityCommand
                             if (sequence.UnboundedLoopIterations >= 2)
                             {
                                 ending = "two unbounded-loop iterations, explicit stop";
-                                original.Call(171, 0, original.SequenceHandle);
+                                original.Stop();
                                 sequence.Stop();
                                 break;
                             }
@@ -320,8 +352,9 @@ public static class ParityCommand
                         report.Results.Add(new
                         {
                             profile = profile.ToString(), resource = report.Input(file), sequence = index,
-                            bank = report.Input(bankPath),
-                            driver = report.Input(Path.Combine(drivers, OriginalMusicDriver.FileName(profile))),
+                            bank = bankPath is null ? null : report.Input(bankPath),
+                            driver = report.Input(adv ?? Path.Combine(drivers, OriginalMusicDriver.FileName(profile))),
+                            revision = revision.ToString(), serviceTicks = original.ServicePeriod.Ticks,
                             events = reference.Events.Count, endTicks = session.Time.Ticks, ending
                         });
                         count++;

@@ -10,6 +10,20 @@ internal abstract class MusicDriver(AILSession session)
     /// <summary>Gets the byte-limited cache capacity, or zero when entries are limited by slots instead.</summary>
     public abstract int CacheCapacity { get; }
 
+    /// <summary>Gets the highest zero-based channel the synthesizer recognizes, MAX_REC_CHAN - 1 in the original.</summary>
+    /// <remarks>The lowest is channel 1 (MIN_TRUE_CHAN - 1). Initialization sends defaults to exactly this range.</remarks>
+    public virtual int LastChannel => 9;
+
+    /// <summary>Gets the highest zero-based channel available for locking, MAX_TRUE_CHAN - 1 in the original.</summary>
+    public virtual int LastLockableChannel => 8;
+
+    /// <summary>Gets QUANT_TIME, the microseconds per service interval the driver build requests from its host timer.</summary>
+    /// <remarks>
+    ///     Sequences count XMIDI delays in these intervals, and ramps advance by a hundredth of one per service. The
+    ///     original host derives the interval from the driver's service rate as 1,000,000 / rate.
+    /// </remarks>
+    public virtual int Interval => 8333;
+
     /// <summary>Emits the original initialization messages.</summary>
     public abstract void Initialize();
 

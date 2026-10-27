@@ -11,6 +11,9 @@ public sealed class OriginalSoundEffects : IDisposable
     /// <summary>The shim's operation dispatcher.</summary>
     private readonly Command _command;
 
+    /// <summary>The rooted AIL boundary callback; the shim retains only its native function pointer.</summary>
+    private readonly Boundary _sink;
+
     /// <summary>A callback failure retained for propagation after native control returns.</summary>
     private Exception? _error;
 
@@ -32,7 +35,8 @@ public sealed class OriginalSoundEffects : IDisposable
         _library = NativeLibrary.Load(Path.Combine(root, "artifacts/soundfx", file));
         _command = Marshal.GetDelegateForFunctionPointer<Command>(NativeLibrary.GetExport(_library, "sfx_command"));
 
-        Marshal.GetDelegateForFunctionPointer<SetSink>(NativeLibrary.GetExport(_library, "sfx_set_sink"))(Boundary);
+        _sink = Boundary;
+        Marshal.GetDelegateForFunctionPointer<SetSink>(NativeLibrary.GetExport(_library, "sfx_set_sink"))(_sink);
         Invoke(0);
         return;
 

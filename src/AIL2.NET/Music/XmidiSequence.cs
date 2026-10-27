@@ -43,11 +43,8 @@ public sealed class XmidiSequence : IDisposable
         _tempoAccum,
         _volumeAccum;
 
-    /// <summary>Original fixed-point beat timing and time-signature numerator.</summary>
-    private int _fraction, _timeFraction, _timePerBeat = 8_000_000, _numerator = 4;
-
-    /// <summary>Beat and measure counters with their original width and wraparound.</summary>
-    private ushort _beat, _measure;
+    /// <summary>The beat and measure counts.</summary>
+    private readonly BeatCounter _beats;
 
     /// <summary>Whether playback has started and whether the handle has been released.</summary>
     private bool _started, _disposed;
@@ -70,11 +67,20 @@ public sealed class XmidiSequence : IDisposable
     /// <summary>Counts completed iterations of original FOR loops whose repeat count is zero (unbounded).</summary>
     public long UnboundedLoopIterations { get; private set; }
 
-    /// <summary>Gets the original look-ahead beat count within the measure, using 16-bit arithmetic.</summary>
-    public ushort BeatCount => AdvancedCount().Beat;
+    /// <summary>Gets the beat within the measure as the original AIL_beat_count reports it, using 16-bit arithmetic.</summary>
+    /// <remarks>
+    ///     DriverRevision.Ail214 follows AIL/32 1.05, which looks one interval ahead; the 1991 release reports the count
+    ///     as it stands.
+    /// </remarks>
+    public ushort BeatCount => _beats.Beat;
 
-    /// <summary>Gets the original look-ahead measure count, including its initial sentinel and 16-bit wraparound.</summary>
-    public ushort MeasureCount => AdvancedCount().Measure;
+    /// <summary>Gets the measure as the original AIL_measure_count reports it, with 16-bit wraparound.</summary>
+    /// <remarks>
+    ///     DriverRevision.Ail214 follows AIL/32 1.05: it looks one interval ahead and starts at 65535, and the first time
+    ///     signature advances the count to 0; the 16-bit AIL 2.14 drivers report 0 until then. The 1991 release starts at
+    ///     0 and keeps the count at a time signature.
+    /// </remarks>
+    public ushort MeasureCount => _beats.Measure;
 
     /// <summary>Initializes a stopped sequence in its allocated session slot.</summary>
     /// <param name="session">The owning session.</param>
@@ -87,6 +93,11 @@ public sealed class XmidiSequence : IDisposable
         _track = track;
         _slot = slot;
         _indirectValues = indirectValues;
+        _beats = session.Revision switch
+        {
+            DriverRevision.Ail1991 => new Ail1991BeatCounter(session.Driver!.Interval),
+            _ => new Ail214BeatCounter()
+        };
         Rewind();
     }
 
@@ -160,11 +171,7 @@ public sealed class XmidiSequence : IDisposable
         RelativeVolume = _volumeTarget = _session.MusicProfile == MusicProfile.Mt32 ? 90 : 100;
         RelativeTempo = _tempoTarget = 100;
         _tempoError = 0;
-        _beat = 0;
-        _measure = 65535;
-        _fraction = _timeFraction = 0;
-        _numerator = 4;
-        _timePerBeat = 8_000_000;
+        _beats.Reset();
     }
 
     /// <summary>Restarts at the first event and restores the original playback defaults.</summary>
@@ -509,8 +516,7 @@ public sealed class XmidiSequence : IDisposable
                 _indirect[ch] = value;
                 return;
             case 118:
-                _beat = _measure = 0;
-                _fraction = -_timeFraction;
+                _beats.Clear();
                 return;
             case 119:
                 LastTrigger = value;
@@ -587,7 +593,7 @@ public sealed class XmidiSequence : IDisposable
         }
     }
 
-    /// <summary>Advances notes, events and ramps for one 8,333-microsecond service.</summary>
+    /// <summary>Advances notes, events and ramps for one driver service interval.</summary>
     internal void Service()
     {
         if (Status != SequenceStatus.Playing)
@@ -599,6 +605,11 @@ public sealed class XmidiSequence : IDisposable
         while (_tempoError >= 100 && Status == SequenceStatus.Playing)
         {
             _tempoError -= 100;
+            if (_beats.CountsBeforeEvents)
+            {
+                _beats.Advance();
+            }
+
             foreach (var note in _notes)
             {
                 if (note.Channel >= 0 && --note.Duration < 0)
@@ -621,15 +632,9 @@ public sealed class XmidiSequence : IDisposable
                 return;
             }
 
-            _fraction = unchecked(_fraction + _timeFraction);
-            if (_fraction >= _timePerBeat)
+            if (!_beats.CountsBeforeEvents)
             {
-                _fraction -= _timePerBeat;
-                if (++_beat >= _numerator)
-                {
-                    _beat = 0;
-                    _measure++;
-                }
+                _beats.Advance();
             }
         }
 
@@ -652,19 +657,21 @@ public sealed class XmidiSequence : IDisposable
     /// <summary>Applies whole ramp steps while retaining the original timing remainder.</summary>
     /// <param name="value">The current percentage.</param>
     /// <param name="target">The target percentage.</param>
-    /// <param name="period">The original period per percentage point.</param>
+    /// <param name="period">The original period per percentage point, in units of 100 microseconds.</param>
     /// <param name="accumulator">The accumulated AIL time, updated with its remainder.</param>
     /// <returns>The next percentage without overshooting the target.</returns>
-    private static int StepRamp(int value, int target, int period, ref int accumulator)
+    private int StepRamp(int value, int target, int period, ref int accumulator)
     {
-        accumulator += 83;
+        accumulator += _session.Driver!.Interval / 100;
         var steps = accumulator / period;
         accumulator %= period;
         return value < target ? Math.Min(target, value + steps) : Math.Max(target, value - steps);
     }
 
     /// <summary>Processes simultaneous events until a delay, stop or end-of-track boundary.</summary>
-    /// <exception cref="InvalidDataException">The event stream cycles without advancing time or specifies zero tempo.</exception>
+    /// <exception cref="InvalidDataException">
+    ///     The event stream cycles without advancing time, or specifies zero tempo under DriverRevision.Ail214.
+    /// </exception>
     private void ProcessEvents()
     {
         var events = _track.Events.Span;
@@ -701,19 +708,10 @@ public sealed class XmidiSequence : IDisposable
                         Status = SequenceStatus.Done;
                         break;
                     case 0x58:
-                        _numerator = data[0];
-                        _timeFraction = data[1] < 2 ? 133333 >> (2 - data[1]) : 133333 << (data[1] - 2);
-                        _fraction = -_timeFraction;
-                        _beat = 0;
-                        _measure++;
+                        _beats.SetTimeSignature(data[0], data[1]);
                         break;
                     case 0x51:
-                        _timePerBeat = ((data[0] << 16) | (data[1] << 8) | data[2]) << 4;
-                        if (_timePerBeat == 0)
-                        {
-                            throw new InvalidDataException("Zero XMIDI tempo.");
-                        }
-
+                        _beats.SetTempo((data[0] << 16) | (data[1] << 8) | data[2]);
                         break;
                     case -1: _session.Driver!.SendSysEx(data, status); break;
                 }
@@ -768,24 +766,6 @@ public sealed class XmidiSequence : IDisposable
 
             EventOffset += at - start;
         }
-    }
-
-    /// <summary>Computes the original look-ahead query without changing playback state.</summary>
-    /// <returns>The beat and measure counters at their original width at the query boundary.</returns>
-    private (ushort Beat, ushort Measure) AdvancedCount()
-    {
-        var beat = _beat;
-        var measure = _measure;
-        if (unchecked(_fraction + _timeFraction) >= _timePerBeat)
-        {
-            if (++beat >= _numerator)
-            {
-                beat = 0;
-                measure++;
-            }
-        }
-
-        return (beat, measure);
     }
 
     /// <summary>Stops this sequence and returns its slot to the session.</summary>
